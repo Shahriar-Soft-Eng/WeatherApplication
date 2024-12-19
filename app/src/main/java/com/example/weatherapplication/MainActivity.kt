@@ -9,9 +9,13 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.weatherapplication.ui.theme.WeatherApplicationTheme
+import androidx.compose.ui.Alignment
+import com.android.volley.Request
+import com.android.volley.toolbox.JsonObjectRequest
+import com.android.volley.toolbox.Volley
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -28,7 +32,8 @@ class MainActivity : ComponentActivity() {
 fun WeatherApp() {
     var searchQuery by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
-    var weatherData by remember { mutableStateOf(getMockWeatherData()) } // Replace with actual data-fetching logic
+    var weatherData by remember { mutableStateOf<WeatherData?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -38,9 +43,19 @@ fun WeatherApp() {
                     if (query.isBlank()) {
                         errorMessage = "Please enter a city name."
                     } else {
-                        // Replace this logic with actual API call
-                        weatherData = getMockWeatherData() // Mock data for demonstration
-                        errorMessage = ""
+                        isLoading = true
+                        fetchWeatherData(
+                            cityName = query,
+                            onSuccess = { data ->
+                                weatherData = data
+                                errorMessage = ""
+                                isLoading = false
+                            },
+                            onError = { error ->
+                                errorMessage = error
+                                isLoading = false
+                            }
+                        )
                     }
                 },
                 onQueryChange = { newQuery -> searchQuery = newQuery },
@@ -53,23 +68,24 @@ fun WeatherApp() {
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                if (errorMessage.isNotBlank()) {
+                if (isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                } else if (errorMessage.isNotBlank()) {
                     ErrorMessage(errorMessage)
-                } else {
-                    TodayWeather(weatherData.todayWeather)
+                } else if (weatherData != null) {
+                    TodayWeather(weatherData!!.todayWeather)
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         text = "7-Day Forecast",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(8.dp)
                     )
-                    ForecastList(weatherData.weeklyForecast)
+                    ForecastList(weatherData!!.weeklyForecast)
                 }
             }
         }
     )
 }
-
 
 @Composable
 fun SearchBar(
@@ -104,7 +120,6 @@ fun SearchBar(
         }
     }
 }
-
 
 @Composable
 fun TodayWeather(todayWeather: TodayWeather) {
@@ -147,7 +162,69 @@ fun ErrorMessage(message: String) {
     )
 }
 
-// Mock Data
+fun fetchWeatherData(
+    cityName: String,
+    onSuccess: (WeatherData) -> Unit,
+    onError: (String) -> Unit
+) {
+    val apiKey = "3901e2132b90493a261b5a0037b9460e"
+    val url = "https://api.openweathermap.org/data/2.5/forecast?q=$cityName&units=metric&appid=$apiKey"
+
+    val requestQueue = Volley.newRequestQueue(AppContext.instance)
+
+    val jsonObjectRequest = JsonObjectRequest(
+        Request.Method.GET, url, null,
+        { response ->
+            try {
+                val todayWeather = parseTodayWeather(response)
+                val weeklyForecast = parseWeeklyForecast(response)
+                onSuccess(WeatherData(todayWeather, weeklyForecast))
+            } catch (e: Exception) {
+                onError("Error parsing weather data")
+            }
+        },
+        { error ->
+            onError("Error fetching data: ${error.message}")
+        }
+    )
+
+    requestQueue.add(jsonObjectRequest)
+}
+
+fun parseTodayWeather(response: JSONObject): TodayWeather {
+    val main = response.getJSONArray("list").getJSONObject(0).getJSONObject("main")
+    val weather = response.getJSONArray("list").getJSONObject(0).getJSONArray("weather").getJSONObject(0)
+
+    return TodayWeather(
+        temperature = main.getDouble("temp").toInt(),
+        condition = weather.getString("description").capitalize(),
+        humidity = main.getInt("humidity"),
+        windSpeed = response.getJSONArray("list").getJSONObject(0).getJSONObject("wind").getDouble("speed").toInt()
+    )
+}
+
+fun parseWeeklyForecast(response: JSONObject): List<DayWeather> {
+    val forecastList = response.getJSONArray("list")
+    val weeklyForecast = mutableListOf<DayWeather>()
+
+    for (i in 0 until forecastList.length() step 8) {
+        val item = forecastList.getJSONObject(i)
+        val main = item.getJSONObject("main")
+        val weather = item.getJSONArray("weather").getJSONObject(0)
+        val date = item.getString("dt_txt").split(" ")[0]
+
+        weeklyForecast.add(
+            DayWeather(
+                date = date,
+                minTemp = main.getDouble("temp_min").toInt(),
+                maxTemp = main.getDouble("temp_max").toInt(),
+                description = weather.getString("description").capitalize()
+            )
+        )
+    }
+    return weeklyForecast
+}
+
 data class TodayWeather(
     val temperature: Int,
     val condition: String,
@@ -166,26 +243,3 @@ data class WeatherData(
     val todayWeather: TodayWeather,
     val weeklyForecast: List<DayWeather>
 )
-
-fun getMockWeatherData(): WeatherData {
-    return WeatherData(
-        todayWeather = TodayWeather(25, "Sunny", 60, 10),
-        weeklyForecast = listOf(
-            DayWeather("Monday", 20, 25, "Cloudy"),
-            DayWeather("Tuesday", 22, 27, "Sunny"),
-            DayWeather("Wednesday", 18, 23, "Rainy"),
-            DayWeather("Thursday", 19, 24, "Partly Cloudy"),
-            DayWeather("Friday", 21, 26, "Thunderstorms"),
-            DayWeather("Saturday", 23, 28, "Sunny"),
-            DayWeather("Sunday", 20, 25, "Windy")
-        )
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun WeatherAppPreview() {
-    WeatherApplicationTheme {
-        WeatherApp()
-    }
-}
