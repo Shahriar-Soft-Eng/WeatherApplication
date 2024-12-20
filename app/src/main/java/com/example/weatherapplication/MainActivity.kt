@@ -18,6 +18,7 @@ import com.android.volley.toolbox.Volley
 import com.google.android.gms.location.LocationServices
 import org.json.JSONObject
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.location.Location
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -27,6 +28,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import com.google.android.gms.location.FusedLocationProviderClient
 import androidx.core.app.ActivityCompat
+import android.content.Context
+import android.content.SharedPreferences
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import org.json.JSONArray
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,31 +83,130 @@ fun GetUserLocation(onLocationReceived: (Location) -> Unit) {
         }
     }
 }
+
+// Constants
+const val PREFS_NAME = "WeatherPrefs"
+const val KEY_LAST_WEATHER = "LastWeatherData"
+// Function to save weather data locally
+fun saveWeatherDataLocally(context: Context, weatherData: WeatherData) {
+    val sharedPreferences: SharedPreferences =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val editor = sharedPreferences.edit()
+
+    // Convert weather data to JSON string
+    val weatherJson = JSONObject().apply {
+        put("todayWeather", JSONObject().apply {
+            put("temperature", weatherData.todayWeather.temperature)
+            put("condition", weatherData.todayWeather.condition)
+            put("humidity", weatherData.todayWeather.humidity)
+            put("windSpeed", weatherData.todayWeather.windSpeed)
+        })
+        put("weeklyForecast", weatherData.weeklyForecast.map { forecast ->
+            JSONObject().apply {
+                put("date", forecast.date)
+                put("minTemp", forecast.minTemp)
+                put("maxTemp", forecast.maxTemp)
+                put("description", forecast.description)
+            }
+        })
+    }.toString()
+
+    // Save JSON string to SharedPreferences
+    editor.putString(KEY_LAST_WEATHER, weatherJson)
+    editor.apply()
+}
+
+// Function to load cached weather data
+fun loadWeatherDataLocally(context: Context): WeatherData? {
+    val sharedPreferences: SharedPreferences =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val weatherJson = sharedPreferences.getString(KEY_LAST_WEATHER, null) ?: return null
+
+    return try {
+        val jsonObject = JSONObject(weatherJson)
+
+        val todayWeatherJson = jsonObject.getJSONObject("todayWeather")
+        val todayWeather = TodayWeather(
+            temperature = todayWeatherJson.getInt("temperature"),
+            condition = todayWeatherJson.getString("condition"),
+            humidity = todayWeatherJson.getInt("humidity"),
+            windSpeed = todayWeatherJson.getInt("windSpeed")
+        )
+
+        val weeklyForecastJsonString = jsonObject.getString("weeklyForecast")
+        val weeklyForecastJson = JSONArray(weeklyForecastJsonString)
+
+        val weeklyForecast = List(weeklyForecastJson.length()) { i ->
+            val forecastJson = weeklyForecastJson.getJSONObject(i)
+            DayWeather(
+                date = forecastJson.getString("date"),
+                minTemp = forecastJson.getInt("minTemp"),
+                maxTemp = forecastJson.getInt("maxTemp"),
+                description = forecastJson.getString("description")
+            )
+        }
+
+        WeatherData(todayWeather, weeklyForecast)
+    } catch (e: Exception) {
+        null
+    }
+}
+
+fun isInternetAvailable(context: Context): Boolean {
+    val connectivityManager =
+        context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val network = connectivityManager.activeNetwork ?: return false
+    val activeNetwork = connectivityManager.getNetworkCapabilities(network) ?: return false
+    return activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+}
+
 @Composable
 fun WeatherApp() {
     var searchQuery by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var weatherData by remember { mutableStateOf<WeatherData?>(null) }
-    var isLoading by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(true) }
     var currentLocation by remember { mutableStateOf<Location?>(null) }
+    val context = LocalContext.current
 
-    // Get the user's current location
+    // Fetch weather data when location changes
+    LaunchedEffect(currentLocation) {
+        if (currentLocation != null && isInternetAvailable(context)) {
+            fetchWeatherDataFromGeoLoc(
+                lat = "${currentLocation!!.latitude}",
+                lon = "${currentLocation!!.longitude}",
+                context = context,
+                onSuccess = { data ->
+                    weatherData = data
+                    errorMessage = ""
+                    isLoading = false
+                },
+                onError = { error ->
+                    errorMessage = "Error fetching data: $error"
+                    isLoading = false
+                }
+            )
+        }
+    }
+
+    // Fetch location
     GetUserLocation { location ->
         currentLocation = location
-        // Fetch weather for the current location
-        fetchWeatherDataFromGeoLoc(
-            lat = "${location.latitude}",
-            lon = "${location.longitude}",
-            onSuccess = { data ->
-                weatherData = data
-                errorMessage = ""
-                isLoading = false
-            },
-            onError = { error ->
-                errorMessage = error
-                isLoading = false
+    }
+
+    // Load cached data if offline
+    LaunchedEffect(Unit) {
+        if (!isInternetAvailable(context)) {
+            val cachedData = loadWeatherDataLocally(context)
+            if (cachedData != null) {
+                weatherData = cachedData
+                errorMessage = "Showing last fetched data (offline)"
+            } else {
+                errorMessage = "No internet connection and no cached data available"
             }
-        )
+            isLoading = false
+        }
     }
 
     Scaffold(
@@ -115,13 +220,14 @@ fun WeatherApp() {
                         isLoading = true
                         fetchWeatherData(
                             cityName = query,
+                            context = context,
                             onSuccess = { data ->
                                 weatherData = data
                                 errorMessage = ""
                                 isLoading = false
                             },
                             onError = { error ->
-                                errorMessage = error
+                                errorMessage = "Error fetching data: $error"
                                 isLoading = false
                             }
                         )
@@ -139,7 +245,7 @@ fun WeatherApp() {
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-                } else if (errorMessage.isNotBlank()) {
+                } else if (errorMessage.isNotBlank() && weatherData == null) {
                     ErrorMessage(errorMessage)
                 } else if (weatherData != null) {
                     TodayWeather(weatherData!!.todayWeather)
@@ -155,7 +261,6 @@ fun WeatherApp() {
         }
     )
 }
-
 
 @Composable
 fun SearchBar(
@@ -234,6 +339,7 @@ fun ErrorMessage(message: String) {
 
 fun fetchWeatherData(
     cityName: String,
+    context: Context,
     onSuccess: (WeatherData) -> Unit,
     onError: (String) -> Unit
 ) {
@@ -248,7 +354,12 @@ fun fetchWeatherData(
             try {
                 val todayWeather = parseTodayWeather(response)
                 val weeklyForecast = parseWeeklyForecast(response)
-                onSuccess(WeatherData(todayWeather, weeklyForecast))
+                val weatherData = WeatherData(todayWeather, weeklyForecast)
+
+                // Save data locally
+                saveWeatherDataLocally(context, weatherData)
+
+                onSuccess(weatherData)
             } catch (e: Exception) {
                 onError("Error parsing weather data")
             }
@@ -264,6 +375,7 @@ fun fetchWeatherData(
 fun fetchWeatherDataFromGeoLoc(
     lat: String,
     lon: String,
+    context: Context,
     onSuccess: (WeatherData) -> Unit,
     onError: (String) -> Unit
 ) {
@@ -278,7 +390,12 @@ fun fetchWeatherDataFromGeoLoc(
             try {
                 val todayWeather = parseTodayWeather(response)
                 val weeklyForecast = parseWeeklyForecast(response)
-                onSuccess(WeatherData(todayWeather, weeklyForecast))
+                val weatherData = WeatherData(todayWeather, weeklyForecast)
+
+                // Save data locally
+                saveWeatherDataLocally(context, weatherData)
+
+                onSuccess(weatherData)
             } catch (e: Exception) {
                 onError("Error parsing weather data")
             }
@@ -290,6 +407,8 @@ fun fetchWeatherDataFromGeoLoc(
 
     requestQueue.add(jsonObjectRequest)
 }
+
+
 fun parseTodayWeather(response: JSONObject): TodayWeather {
     val main = response.getJSONArray("list").getJSONObject(0).getJSONObject("main")
     val weather = response.getJSONArray("list").getJSONObject(0).getJSONArray("weather").getJSONObject(0)
