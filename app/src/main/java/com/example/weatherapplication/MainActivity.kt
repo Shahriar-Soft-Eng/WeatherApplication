@@ -32,6 +32,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import org.json.JSONArray
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -132,7 +133,9 @@ fun loadWeatherDataLocally(context: Context): WeatherData? {
             windSpeed = todayWeatherJson.getInt("windSpeed")
         )
 
-        val weeklyForecastJson = jsonObject.getJSONArray("weeklyForecast")
+        val weeklyForecastJsonString = jsonObject.getString("weeklyForecast")
+        val weeklyForecastJson = JSONArray(weeklyForecastJsonString)
+
         val weeklyForecast = List(weeklyForecastJson.length()) { i ->
             val forecastJson = weeklyForecastJson.getJSONObject(i)
             DayWeather(
@@ -178,25 +181,29 @@ fun WeatherApp() {
             }
         }
     }
-    // Get the user's current location
-    GetUserLocation { location ->
-        currentLocation = location
-        // Fetch weather for the current location
-        fetchWeatherDataFromGeoLoc(
-            lat = "${location.latitude}",
-            lon = "${location.longitude}",
-            context = context,
-            onSuccess = { data ->
-                weatherData = data
-                errorMessage = ""
-                isLoading = false
-            },
-            onError = { error ->
-                errorMessage = error
-                isLoading = false
-            }
-        )
+    if (isInternetAvailable(context))
+    {
+        // Get the user's current location
+        GetUserLocation { location ->
+            currentLocation = location
+            // Fetch weather for the current location
+            fetchWeatherDataFromGeoLoc(
+                lat = "${location.latitude}",
+                lon = "${location.longitude}",
+                context = context,
+                onSuccess = { data ->
+                    weatherData = data
+                    errorMessage = ""
+                    isLoading = false
+                },
+                onError = { error ->
+                    errorMessage = error
+                    isLoading = false
+                }
+            )
+        }
     }
+
 
     Scaffold(
         topBar = {
@@ -397,6 +404,8 @@ fun fetchWeatherDataFromGeoLoc(
 
     requestQueue.add(jsonObjectRequest)
 }
+
+
 fun parseTodayWeather(response: JSONObject): TodayWeather {
     val main = response.getJSONArray("list").getJSONObject(0).getJSONObject("main")
     val weather = response.getJSONArray("list").getJSONObject(0).getJSONArray("weather").getJSONObject(0)
