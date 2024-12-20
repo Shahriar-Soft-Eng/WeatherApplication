@@ -166,11 +166,37 @@ fun WeatherApp() {
     var searchQuery by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var weatherData by remember { mutableStateOf<WeatherData?>(null) }
-    var isLoading by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(true) }
     var currentLocation by remember { mutableStateOf<Location?>(null) }
     val context = LocalContext.current
+
+    // Fetch weather data when location changes
+    LaunchedEffect(currentLocation) {
+        if (currentLocation != null && isInternetAvailable(context)) {
+            fetchWeatherDataFromGeoLoc(
+                lat = "${currentLocation!!.latitude}",
+                lon = "${currentLocation!!.longitude}",
+                context = context,
+                onSuccess = { data ->
+                    weatherData = data
+                    errorMessage = ""
+                    isLoading = false
+                },
+                onError = { error ->
+                    errorMessage = "Error fetching data: $error"
+                    isLoading = false
+                }
+            )
+        }
+    }
+
+    // Fetch location
+    GetUserLocation { location ->
+        currentLocation = location
+    }
+
+    // Load cached data if offline
     LaunchedEffect(Unit) {
-        // Check for internet connection and load cached data if offline
         if (!isInternetAvailable(context)) {
             val cachedData = loadWeatherDataLocally(context)
             if (cachedData != null) {
@@ -179,31 +205,9 @@ fun WeatherApp() {
             } else {
                 errorMessage = "No internet connection and no cached data available"
             }
+            isLoading = false
         }
     }
-    if (isInternetAvailable(context))
-    {
-        // Get the user's current location
-        GetUserLocation { location ->
-            currentLocation = location
-            // Fetch weather for the current location
-            fetchWeatherDataFromGeoLoc(
-                lat = "${location.latitude}",
-                lon = "${location.longitude}",
-                context = context,
-                onSuccess = { data ->
-                    weatherData = data
-                    errorMessage = ""
-                    isLoading = false
-                },
-                onError = { error ->
-                    errorMessage = error
-                    isLoading = false
-                }
-            )
-        }
-    }
-
 
     Scaffold(
         topBar = {
@@ -223,7 +227,7 @@ fun WeatherApp() {
                                 isLoading = false
                             },
                             onError = { error ->
-                                errorMessage = error
+                                errorMessage = "Error fetching data: $error"
                                 isLoading = false
                             }
                         )
@@ -241,7 +245,7 @@ fun WeatherApp() {
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-                } else if (errorMessage.isNotBlank()) {
+                } else if (errorMessage.isNotBlank() && weatherData == null) {
                     ErrorMessage(errorMessage)
                 } else if (weatherData != null) {
                     TodayWeather(weatherData!!.todayWeather)
@@ -257,7 +261,6 @@ fun WeatherApp() {
         }
     )
 }
-
 
 @Composable
 fun SearchBar(
