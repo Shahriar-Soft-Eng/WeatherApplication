@@ -15,7 +15,18 @@ import androidx.compose.ui.Alignment
 import com.android.volley.Request
 import com.android.volley.toolbox.JsonObjectRequest
 import com.android.volley.toolbox.Volley
+import com.google.android.gms.location.LocationServices
 import org.json.JSONObject
+import android.Manifest
+import android.content.pm.PackageManager
+import android.location.Location
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
+import com.google.android.gms.location.FusedLocationProviderClient
+import androidx.core.app.ActivityCompat
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -27,13 +38,71 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+@Composable
+fun GetUserLocation(onLocationReceived: (Location) -> Unit) {
+    val context = LocalContext.current
+    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
 
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted ->
+            if (isGranted) {
+                // Permission granted, get the current location
+                fusedLocationClient.lastLocation.addOnSuccessListener { location: Location? ->
+                    location?.let {
+                        onLocationReceived(it)
+                    }
+                }
+            } else {
+                // Permission denial
+            }
+        }
+    )
+
+    LaunchedEffect(Unit) {
+        // Check and request location permission
+        if (ActivityCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            // Already have permission, get the location
+            fusedLocationClient.lastLocation.addOnSuccessListener { location: Location? ->
+                location?.let {
+                    onLocationReceived(it)
+                }
+            }
+        } else {
+            permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
+}
 @Composable
 fun WeatherApp() {
     var searchQuery by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var weatherData by remember { mutableStateOf<WeatherData?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+    var currentLocation by remember { mutableStateOf<Location?>(null) }
+
+    // Get the user's current location
+    GetUserLocation { location ->
+        currentLocation = location
+        // Fetch weather for the current location
+        fetchWeatherDataFromGeoLoc(
+            lat = "${location.latitude}",
+            lon = "${location.longitude}",
+            onSuccess = { data ->
+                weatherData = data
+                errorMessage = ""
+                isLoading = false
+            },
+            onError = { error ->
+                errorMessage = error
+                isLoading = false
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -86,6 +155,7 @@ fun WeatherApp() {
         }
     )
 }
+
 
 @Composable
 fun SearchBar(
@@ -191,6 +261,35 @@ fun fetchWeatherData(
     requestQueue.add(jsonObjectRequest)
 }
 
+fun fetchWeatherDataFromGeoLoc(
+    lat: String,
+    lon: String,
+    onSuccess: (WeatherData) -> Unit,
+    onError: (String) -> Unit
+) {
+    val apiKey = "3901e2132b90493a261b5a0037b9460e"
+    val url = "https://api.openweathermap.org/data/2.5/forecast?lat=$lat&lon=$lon&appid=$apiKey&units=metric"
+
+    val requestQueue = Volley.newRequestQueue(AppContext.instance)
+
+    val jsonObjectRequest = JsonObjectRequest(
+        Request.Method.GET, url, null,
+        { response ->
+            try {
+                val todayWeather = parseTodayWeather(response)
+                val weeklyForecast = parseWeeklyForecast(response)
+                onSuccess(WeatherData(todayWeather, weeklyForecast))
+            } catch (e: Exception) {
+                onError("Error parsing weather data")
+            }
+        },
+        { error ->
+            onError("Error fetching data: ${error.message}")
+        }
+    )
+
+    requestQueue.add(jsonObjectRequest)
+}
 fun parseTodayWeather(response: JSONObject): TodayWeather {
     val main = response.getJSONArray("list").getJSONObject(0).getJSONObject("main")
     val weather = response.getJSONArray("list").getJSONObject(0).getJSONArray("weather").getJSONObject(0)
