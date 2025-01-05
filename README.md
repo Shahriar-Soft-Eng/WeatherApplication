@@ -4,7 +4,7 @@
 A weather application built with Kotlin and Jetpack Compose that fetches current weather and a 7-day forecast for the user's location or a searched city using the OpenWeatherMap API. It supports offline mode by caching weather data locally.
 
 ## Project Screensort
-![App Screenshot](app-screensort.png "App Main Screen")
+![App Screenshot](app-screensort.jpeg "App Main Screen")
 ---
 
 ## Project Setup Instructions
